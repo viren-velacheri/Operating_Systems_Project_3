@@ -1,0 +1,448 @@
+                   +---------------------------+
+                    |           CS 439          |
+                    | PROJECT 3: VIRTUAL MEMORY |
+                    |      DESIGN DOCUMENT      |
+                    +---------------------------+
+
+
+
+
+The questions in this design document should reflect the design of the code you
+wrote for the project.  Your grade will reflect both the quality of your answer
+in this document and the quality of the design implementation in your code.  You
+may receive partial credit for answering questions for parts of the project that
+you did not get to implement, but you must indicate in your answer that there is
+no corresponding implementation, or you will not receive any credit.
+
+
+For each question, you should include both the name of the file(s), function
+name(s), and the line numbers where the relevant code may be found.
+
+
+These design documents should be completed individually.  Group members are
+welcome to use this document as a guide for design and are welcome to discuss
+the questions, but there should be no group notes or other sorts of copying of
+design documents.
+
+
+When you have completed your design document, submit it to the Canvas assignment
+Project 3 Design and Documentation.  ***Your submission must be a text file and
+each line must not extend past 80 characters.  In addition, your submission must
+contain all of the original material and not exceed 18,000 characters.  The
+character count will be measured using the Linux command wc.  (Note that rtf
+files are NOT text files.)
+
+
+
+
+---- Name ----
+
+
+>> Fill your name, UT EID, CS login, email address, and unique number:
+
+
+Name: Viren Velacheri
+EID: vv6898
+CS login: vtrain
+Email: viren.velacheri@utexas.edu
+Unique Number: 50485
+
+
+
+
+Slip days used on this project: 1
+
+
+---- GROUP ----
+
+
+>> Fill the names, UT EIDs, CS logins, email addresses, and unique numbers
+>> of your group members.  Also fill in each person's ranking on the 
+>> partner evaluation scale, as determined by you.
+
+
+Name1: Brock Moore
+EID1: bam4865
+CS login: bmoore
+Email: brockm2018@gmail.com
+Unique Number: 50480
+Ranking (scale below): Excellent
+
+
+Name2: Jordan Wang
+EID2: jyw283
+CS login: jwang724
+Email: jordan.y.wang@gmail.com
+Unique Number: 50475
+Ranking (scale below): Excellent
+
+
+Name3: Jasper Lin
+EID2: jl67987
+CS login: jasperl
+Email: jasperlin@utexas.edu
+Unique Number: 50485
+Ranking (scale below): Excellent
+
+
+
+
+---- PARTNER EVALUATION SCALE ----
+
+
+>> Excellent: Consistently went above and beyond - tutored others, carried
+>> more than his/her fair share of the load.
+
+
+>> Very Good: Consistently did what he/she was supposed to do, very well
+>> prepared and cooperative.
+
+
+>> Satisfactory: Usually did what he/she was supposed to do, minimally
+>> prepared and cooperative.
+
+
+>> Marginal: Sometimes failed to show up and/or rarely prepared.
+
+
+>> Deficient: Often failed to show up and/or rarely prepared.
+
+
+>> Unsatisfactory: Consistently failed to show up and/or unprepared.
+
+
+>> Superficial: Practically no participation.
+
+
+>> No Show: No participation at all.
+
+
+
+
+---- PRELIMINARIES ----
+
+
+>> If you have any preliminary comments on your submission or notes for the
+>> TAs, please give them here.
+
+
+>> Please cite any offline or online sources you consulted while
+>> preparing your submission, other than the Pintos documentation, course
+>> text, lecture notes, and course staff.
+
+
+                        PAGE TABLE MANAGEMENT
+                        =====================
+
+
+---- DATA STRUCTURES ----
+
+
+>> A1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', ‘#define’, or
+>> enumeration that was necessary for your page table implementation.
+>> (Your frame table information should go in B1.)  
+>> Identify the purpose of each in 25 words or less.
+
+In page.c:
+#define NOT_AVAIL -1 // used when spot in frame or swap isn't there.
+#define NUM_SECTORS_IN_PAGE 8 // number of sectors in page based off size.
+
+Added to struct thread:
+struct hash page_table;            /* Supplemental Page Table */
+struct lock page_table_lock;       /* Lock for Page Table */
+void *esp_copy;                    /*copy of esp for system calls*/
+
+struct page 
+{
+    struct hash_elem hash_elem; // used for accessing in suppl. page table.
+    block_sector_t swap_index; // position on swap if applicable
+    void *addr; //virtual address for this page
+    struct file *resident_file; //file where the page is stored
+    off_t offset; //offset for that file
+    uint32_t read_bytes; //number of bytes to read
+    uint32_t zero_bytes; //number of zero bytes
+    bool writable; //whether this page is writable or not
+    int frame_spot; //index of this page in the frame table
+};
+
+
+---- ALGORITHMS ----
+
+
+>> A2: Describe your code for locating the necessary data when a 
+>> process page faults in the code segment.  
+
+When a process page faults or there is a faulting address, we enter
+our page fault handler in exception.c (line 137). We first check to see if
+the faulting address is a read only page (lines 168-171). If it is, we exit
+with a -1 error status since we can't write to a read only page. We then see
+whether the access to this address was a write and either if the faulting
+address is within 32 bytes of the stack pointer or if it is within 32 bytes
+of the process's copy of the stack pointer in the case where the page fault
+occurred in a system call (line 175).
+The reason being is that even though normally you use the f->esp in
+page_fault(), if a page fault occurs in a system call,and the user stack has
+to grow, f->esp represents the kernel's esp, and not the user's. A check is 
+then done to make that the maximum stack size of 8MB has not been 
+exceeded (lines 178-181). We create a new supplemental page table entry 
+and assign its virtual address as the faulting address page aligned
+and set its writable to true (lines 190-197). We then insert this new
+new entry in the supplemental page table (lines 199-206). We then get
+a frame (line 210) and set page's frame index to this frame(lines 218-227). 
+This new page mapping is then installed in the page directory (line 231).
+If faulting address is not trying to grow the stack, 
+we find the supplemental page table entry
+with this page aligned version of the faulting address (line 242). If
+being accessed on swap (line 248), we get a frame (line 251) and find an
+open frame (lines 259-268). We read from swap to the page's allocated
+physical address (lines 271-282). Bits of that page's entry in swap
+is set to not being used. Then add page to process's page 
+directory (line 289). If not in swap, page must be read from 
+the file system. We get a a frame (line 301) and set page's frame index
+to this frame (lines 309-320). Load this page by seeking it and then 
+reading it (lines 324-331). Then we add page to the process's page
+directory (line 336).
+
+>> A3: How does your code coordinate accessed and dirty bits between
+>> kernel and user virtual addresses that are aliases for the same
+>> frame, or alternatively how do you avoid the issue?
+
+We avoid this issue because each frame entry in the our frame table
+only maps to a single user virtual address and its corresponding 
+supplemental page table entry, so there is never a case where two 
+or more pages refer to the same frame as there can only be one.
+
+---- SYNCHRONIZATION ----
+
+
+>> A4: When two user processes both need a new frame at the same time,
+>> how are races avoided?
+
+We have a lock for the frame table, so only one process can access
+and/or modify it at a time.
+
+We didn't implement this, but, if we had more time, we were planning
+on having a boolean member variable for the page struct called pinning
+that would be useded to keep track of whether that page is in the process of
+being loaded and/or evicted. If so, its pin would be set to true and
+exclude other processes from accessing its frame until it is done being 
+loaded and/or evicted.
+
+---- RATIONALE ----
+
+
+>> A5: Why did you choose the data structure(s) that you did for
+>> storing any supplemental page information?  Please compare to
+>> an alternative data structure.
+
+We used a hash table because we believed the main use of our 
+supplemental page table would be looking up existing page table
+entries and inserting new ones and knowing that Hash tables have
+an O(1) time for both these actions, we thought this would be the
+best. Looking back at it though, it appears the hash table in 
+pintos isn't a true hash table like in Java and other languages.
+It has some hash like attributes, but also acts like a hybrid 
+of a list and an array where it has an pointer to lists of 
+buckets for containing its entries. Interesting to say the
+least.
+
+We didn't think an Array was a good option since it would
+have had to be a dynamically allocated array and we thought
+it would be more complicated. Looking back, a list could have
+been something that we could have used since this hash table acts
+very similar to a list. However, the methods for accessing and
+getting back entries from the hash table seemed easier to us.
+The only knock on this hash table is the amount of space it 
+takes up which is more than both lists and arrays.
+
+                       PAGING TO AND FROM DISK
+                       =======================
+
+
+---- DATA STRUCTURES ----
+
+
+>> B1: Copy here the declaration of each new or changed `struct' or
+>> `struct' member, global or static variable, `typedef', ‘#define’, or
+>> enumeration that was necessary for your frame and swap implementations.  
+>> Identify the purpose of each in 25 words or less.
+
+#define NUM_FRAMES 367 // Number of pages in user pool.
+#define SECTORS_PER_PAGE 8 //sectors are 512 bytes, pages are 4096
+
+struct frame {
+    struct thread *owner_thread; // thread that owns the page in this frame
+    void *page; //physical address of the page in this frame
+    struct page *resident_page; //page residing in this frame
+};
+
+struct frame *frame_table[NUM_FRAMES]; // Frame Table
+struct lock frame_lock;  // Lock for frame table
+
+struct bitmap *swap_table; // Swap table struct
+struct lock swap_lock; // lock used for swap table accesses.
+
+---- ALGORITHMS ----
+
+
+>> B2: When a frame is required but none are free, some frame must be
+>> evicted.  Describe your algorithm for choosing a frame to evict.
+
+So in frame.c in the random_evict() method (lines 123-165), we just picked
+a default frame to evict, which was the 10th one, since we couldn't get the
+random eviction algorithm as we were getting back negative values for 
+entries. However, with a little more time, we would have probably tried
+to implement the second chance algorithm. To start, we would traverse
+the list of frames until we come upon a frame with a 0 accessed bit
+or hasn't been accessed and its dirty bit isn't set. As we advanced 
+through the frames, the accessed bits would be cleared. From there,
+if no frame is found that doesn't contain a page that isn't dirty
+and hasn't been accessed, we would loop a second time around. This time,
+dirty bits would be cleared as this is done. If still no page that
+isn't dirty or hasn't been found, now just pick the first frame. 
+Now the page structs would have isdirty and isaccessed booleans to
+keep hold of whether the page is actually dirty and whether it has
+been accessed. 
+
+>> B3: When a process P obtains a frame that was previously used by a
+>> process Q, how do you adjust the page table (and any other data
+>> structures) to reflect that Q no longer has the frame?
+So in frame.c in our random_evict method, we remove 
+the Q's page's mapping to physical memory (line 158). We then
+free the virtual address at that frame table entry (line 160). 
+We free the overall frame entry as well and set it to NULL
+(lines 160-161). Not to mention that at line 156, we set the 
+page table entry's (one associated with process Q) frame 
+spot to -1 to indicate that it no longer has not just that 
+frame, but any frame. 
+
+
+>> B4: Explain your heuristic for deciding whether or not  page fault 
+>> for an invalid virtual address should cause the stack to be extended.
+
+So in page_fault() in exception.c, we first make sure virtual address
+isn't trying to access a read only page (line 168-170). Then 
+for deciding whether it is extending the stack or not, we see 
+whether the access to this address was a write and either if the faulting
+address is within 32 bytes of the stack pointer or if it is within 32 bytes
+of the process's copy of the stack pointer in the case where the page fault
+occurred in a system call (line 175).
+The reason being is that even though normally you use the f->esp in
+page_fault(), if a page fault occurs in a system call,and the user stack has
+to grow, f->esp represents the kernel's esp, and not the user's.
+If this heuristic of ours is not met, then we assuming the faulting address
+is not trying to grow the stack and that the page with this address must
+be in swap (lines 248-295) or page has to be read from the file system
+(lines 298-344).
+
+
+
+---- SYNCHRONIZATION ----
+
+
+>> B5: Explain the basics of how you managed synchronization in your VM
+>> design.  In particular, explain how it prevents deadlock. 
+
+We basically had locks for each of the three of our main data structures:
+the supplemental page table, the frame table, and the swap table.
+Any access to each of these structures, the appropriate lock
+was acquired and then released when the access or modification of the
+particular structure was done. We had methods in thread.c called 
+lock_acquire_check() (lines 134-140) and lock_release_check
+(lines 144-150) that prevented the processes from either
+acquiring lock if they already had it or releasing it if
+they already had. In our design itself, we are not sure if 
+we managed deadlock exactly. We just tried to make sure that
+locks were held and released only as long as they needed to be.
+We didn't have an established order of acquiring and releasing
+these locks, especially in some cases like for eviction, 
+where multiple locks had to be used. We definitely would have done
+that probably in the order of the frame table lock, swap table
+lock, and then the page supplemental table lock. 
+
+>> B6: A page fault in process P can cause another process Q's frame
+>> to be evicted.  How do you ensure that Q cannot access or modify
+>> the page during the eviction process?  How do you avoid a race
+>> between P evicting Q's frame and Q faulting the page back in?
+
+We didn't really establish this but we probably would have tried
+to do pinning where any page being accessed or modified like when 
+it is being loaded or being evicted cannot be accessed by like 
+process Q. We avoid the race with the frame lock as only one
+process is allowed to modify or access the overall frame at
+a time, so this would not happen.
+
+>> B7: Suppose a page fault in process P causes a page to be read from
+>> the filesystem or swap.  How do you ensure that a second process Q
+>> cannot interfere by, for example, attempting to evict the frame while it is
+>> still being read in?
+
+I don't think we really do. We probably would again use pinning where
+a frame retrieved for loading or being accessed during eviction is 
+marked as pinned so it can't be accessed or interfered with by another 
+process like Q. They are only unpinned once the loading or access
+during eviction is done.
+
+
+
+
+>> B8: Explain how you handle access to paged-out pages that occur
+>> during system calls.  Do you use page faults to bring in pages (as
+>> in user programs), or do you have a mechanism for "locking" frames
+>> into physical memory, or do you use some other design?  If your method
+>>could result in potential deadlock, how do you prevent it?  
+
+We try to get page in page fault handler. If faulting address matches
+our stack growth heuristic, we extend stack. Otherwise, we find
+page in supplemental page table and see if it is swap or needs to be
+loaded for filesystem. The only thing we check before this is whether 
+is it trying to modify a read/only page. if so, exit with -1
+error status.
+
+
+---- RATIONALE ----
+
+
+>> B9: A single lock for the whole VM system would make
+>> synchronization easy but limit parallelism.  On the other hand,
+>> using many locks complicates synchronization and raises the
+>> possibility for deadlock but allows for high parallelism.  Explain
+>> where your design falls along this continuum and why you chose to
+>> design it this way.
+We use only three locks for the three main data structures and it is only 
+used when operations around the data structures are taking place, whether
+it is modification or even just being accessed. At least that is what 
+we tried to do.
+
+
+                           SURVEY QUESTIONS
+                           ================
+
+
+Answering these questions is optional, but it will help us improve the
+course in future quarters.  Feel free to tell us anything you
+want--these questions are just to spur your thoughts.  You may also
+choose to respond anonymously in the course evaluations at the end of
+the semester.
+
+
+>> In your opinion, was this assignment, or any one of the problems
+>> in it, too easy or too hard?  Did it take too long or too little time?
+
+
+>> Did you find that working on a particular part of the assignment gave
+>> you greater insight into some aspect of OS design?
+
+
+>> Is there some particular fact or hint we should give students in
+>> future quarters to help them solve the problems?  Conversely, did you
+>> find any of our guidance to be misleading?
+
+
+>> Do you have any suggestions for the TAs to more effectively assist
+>> students, either for future quarters or the remaining projects?
+
+
+>> Any other comments?
+
